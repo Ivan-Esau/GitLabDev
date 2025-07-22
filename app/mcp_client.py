@@ -9,7 +9,6 @@ from mcp.client.stdio import stdio_client
 from .config import server_params
 from .utils import try_json, sanitize_schema, norm, projects_md_table
 
-# ---------- Startup / Shutdown ----------
 async def init_mcp(app: FastAPI):
     stack = AsyncExitStack()
     await stack.__aenter__()
@@ -36,7 +35,6 @@ async def init_mcp(app: FastAPI):
 async def close_mcp(app: FastAPI):
     await app.state.stack.aclose()
 
-# ---------- Tools ----------
 def build_gemini_tool_block(mcp_tools) -> List[Dict[str, Any]]:
     fns = []
     for t in mcp_tools:
@@ -66,7 +64,6 @@ async def call_mcp_tool(app: FastAPI, name: str, args: Dict[str, Any]) -> Any:
 
     return try_json(str(res))
 
-# ---------- Context Utils ----------
 def update_context(app: FastAPI, sid: str, tool_name: str, result: Any) -> None:
     ctx = app.state.contexts.setdefault(sid, {})
     try:

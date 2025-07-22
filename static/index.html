@@ -1,238 +1,340 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MCP Chat</title>
-  <link rel="stylesheet" href="/static/styles.css"/>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <meta charset="UTF-8" />
+  <title>MCP Studio – GitLab + LLM</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-<main class="layout3">
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-head">
-      <h2>Projekte</h2>
-      <button id="reload-projects" title="Projekte neu laden">↻</button>
+  <header class="topbar">
+    <div class="brand">MCP Studio</div>
+
+    <div class="project-chip" id="active-project">Kein Projekt gewählt</div>
+
+    <div class="model-select">
+      <label for="model">Model:</label>
+      <select id="model">
+        <option value="gemini-2.0-flash" selected>gemini-2.0-flash</option>
+        <option value="gpt-4o-mini">gpt-4o-mini</option>
+      </select>
     </div>
-    <div id="project-list" class="project-list">Lade…</div>
-  </aside>
 
-  <section class="chat-panel">
-    <header class="topbar">
-      <h1>MCP Chat <span>(Gemini + GitLab)</span></h1>
-      <div class="actions">
-        <button id="reset-btn" title="Kontext löschen">Reset</button>
+    <button id="btn-reset" title="Konversation & Kontext zurücksetzen">Reset</button>
+
+    <div class="agent-controls">
+      <button id="btn-agent-start">Agent starten</button>
+      <span id="agent-status-chip" class="chip muted">Idle</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- LEFT -->
+    <aside class="left">
+      <input id="proj-search" placeholder="Projekte suchen…" />
+
+      <nav class="tabs">
+        <button class="tab-btn active" data-tab="projects">Projects</button>
+        <button class="tab-btn" data-tab="issues">Issues</button>
+        <button class="tab-btn" data-tab="mrs">MRs</button>
+        <button class="tab-btn" data-tab="pipelines">Pipelines</button>
+      </nav>
+
+      <div class="tab-content">
+        <div id="tab-projects" class="tab-pane active">
+          <ul id="projects-list" class="list"></ul>
+        </div>
+        <div id="tab-issues" class="tab-pane">
+          <div id="issues-empty" class="muted small">Keine Issues geladen</div>
+          <ul id="issues-list" class="list"></ul>
+        </div>
+        <div id="tab-mrs" class="tab-pane">
+          <div id="mrs-empty" class="muted small">Keine Merge Requests geladen</div>
+          <ul id="mrs-list" class="list"></ul>
+        </div>
+        <div id="tab-pipelines" class="tab-pane">
+          <div id="pipes-empty" class="muted small">Keine Pipelines geladen</div>
+          <ul id="pipes-list" class="list"></ul>
+        </div>
       </div>
-    </header>
+    </aside>
 
-    <div id="messages" class="messages"></div>
+    <!-- CENTER -->
+    <main class="center">
+      <div id="messages" class="chat"></div>
 
-    <form id="chat-form" class="composer">
-      <textarea id="chat-input" placeholder="Nachricht an die LLM… (Enter = senden, Shift+Enter = Zeile)"></textarea>
-      <button type="submit" id="send-btn">Senden</button>
-    </form>
-  </section>
+      <form id="composer">
+        <textarea id="input" placeholder="Schreibe eine Nachricht … (Shift+Enter = Zeilenumbruch)"></textarea>
+        <button type="submit">Senden</button>
+      </form>
 
-  <aside class="context-panel">
-    <h2 id="ctx-title">Projekt-Details</h2>
-    <div id="ctx-meta" class="ctx-meta empty">Kein Projekt gewählt.</div>
+      <section id="code-view" class="code-view hidden">
+        <header>
+          <span id="code-path"></span>
+          <button id="code-close">×</button>
+        </header>
+        <pre id="code-content"></pre>
+      </section>
+    </main>
 
-    <h3 class="mt">README</h3>
-    <div id="ctx-readme" class="ctx-readme empty">–</div>
+    <!-- RIGHT -->
+    <aside class="right">
+      <section id="proj-meta" class="panel">
+        <h3>Projekt</h3>
+        <div id="proj-meta-content" class="muted small">–</div>
+      </section>
 
-    <h3 class="mt">Repository-Struktur</h3>
-    <div id="ctx-tree" class="ctx-tree empty">–</div>
+      <section id="readme" class="panel">
+        <h3>README</h3>
+        <pre id="readme-content" class="pre-scroll muted">–</pre>
+      </section>
 
-    <details class="mt small">
-      <summary>Debug-Trace</summary>
-      <pre id="trace-box" class="trace-box"></pre>
-    </details>
-  </aside>
-</main>
+      <section id="tree" class="panel">
+        <h3>Repo Tree</h3>
+        <ul id="tree-list" class="tree"></ul>
+      </section>
 
-<div id="loading" class="loading hidden">…</div>
+      <section id="agent-panel" class="panel">
+        <h3>Coding-Agent</h3>
+        <div id="agent-info" class="muted small">Noch nicht gestartet.</div>
+      </section>
 
-<script>
-const SID = Math.random().toString(36).slice(2);
-const messagesEl   = document.getElementById('messages');
-const chatForm     = document.getElementById('chat-form');
-const chatInput    = document.getElementById('chat-input');
-const resetBtn     = document.getElementById('reset-btn');
-const loadingEl    = document.getElementById('loading');
-const projListEl   = document.getElementById('project-list');
-const reloadBtn    = document.getElementById('reload-projects');
-const ctxMetaEl    = document.getElementById('ctx-meta');
-const ctxReadmeEl  = document.getElementById('ctx-readme');
-const ctxTreeEl    = document.getElementById('ctx-tree');
-const traceBox     = document.getElementById('trace-box');
-const ctxTitle     = document.getElementById('ctx-title');
+      <details>
+        <summary>Trace / Debug</summary>
+        <button id="btn-show-conv" class="small">Conv</button>
+        <button id="btn-show-context" class="small">Context</button>
+        <pre id="trace-content" class="pre-scroll small"></pre>
+      </details>
+    </aside>
+  </div>
 
-function showLoading(on){ loadingEl.classList.toggle('hidden', !on); }
-function renderMarkdown(md){ return marked.parse(md || "", { breaks:true }); }
+  <script type="module">
+    // ====== Utility ======
+    const sid = Math.random().toString(36).slice(2);
+    let activeProject = null;
+    let modelSelect = null;
+    let pollingAgent = false;
 
-function appendMessage(role, text){
-  const div = document.createElement('div');
-  div.className = `msg ${role}`;
-  div.innerHTML = `<div class="name">${role === 'user' ? 'Du' : 'LLM'}</div>
-                   <div class="bubble">${renderMarkdown(text)}</div>`;
-  messagesEl.appendChild(div);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  enhanceCodeBlocks(div);
-}
-function enhanceCodeBlocks(root){
-  root.querySelectorAll('pre code').forEach(block=>{
-    const wrap = block.parentElement;
-    if(!wrap.classList.contains('codeblock')){
-      wrap.classList.add('codeblock');
-      const btn = document.createElement('button');
-      btn.textContent = 'Copy';
-      btn.className = 'copy-btn';
-      btn.addEventListener('click', ()=>{
-        navigator.clipboard.writeText(block.innerText);
-        btn.textContent = '✓';
-        setTimeout(()=>btn.textContent='Copy',1000);
+    async function api(path, body, method = "POST") {
+      const opt = { method, headers: { "Content-Type": "application/json" } };
+      if (body) opt.body = JSON.stringify(body);
+      const r = await fetch(path, opt);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+    const GET = (p) => fetch(p).then(r => r.json());
+
+    function el(q){ return document.querySelector(q); }
+    function els(q){ return [...document.querySelectorAll(q)]; }
+
+    function escapeHTML(s){
+      if (s == null) return "";
+      return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    }
+
+    function normalizeProject(p){
+      if(!p || typeof p !== 'object') return {};
+      return {
+        id:             p.id ?? p.project_id ?? p.result?.id,
+        name:           p.name ?? p.name_with_namespace ?? p.path ?? p.path_with_namespace ?? "Unbekannt",
+        path:           p.path ?? p.path_with_namespace ?? "",
+        web_url:        p.web_url ?? "",
+        default_branch: p.default_branch ?? "main",
+        readme:         p.readme ?? "",
+        root_tree:      Array.isArray(p.root_tree) ? p.root_tree : []
+      };
+    }
+
+    function addMessage(role, text){
+      const box = el('#messages');
+      const wrap = document.createElement('div');
+      wrap.className = 'msg ' + role;
+      wrap.innerHTML = `<div class="bubble">${escapeHTML(text)}</div>`;
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function renderProjectMeta(desc){
+      const path = desc.path || "-";
+      const t = `
+ID: ${escapeHTML(desc.id)}<br>
+Pfad: ${escapeHTML(path)}<br>
+URL: <a href="${escapeHTML(desc.web_url)}" target="_blank">${escapeHTML(desc.web_url)}</a><br>
+Branch: ${escapeHTML(desc.default_branch)}
+`;
+      el('#proj-meta-content').innerHTML = t;
+    }
+
+    function renderREADME(txt){
+      el('#readme-content').textContent = txt || '–';
+    }
+
+    function renderTree(tree){
+      const ul = el('#tree-list');
+      ul.innerHTML = '';
+      if(!tree || !tree.length){
+        ul.innerHTML = '<li class="muted small">leer</li>';
+        return;
+      }
+      tree.forEach(it=>{
+        const li = document.createElement('li');
+        li.className = it.type;
+        li.textContent = it.path;
+        li.addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          if(it.type === 'blob'){
+            const file = await api(`/api/tool/get_file`, {arguments:{
+              project_ref: activeProject.id,
+              file_path: it.path,
+              ref: activeProject.default_branch,
+              decode: true
+            }});
+            const c = (file.result && (file.result.content || file.result.content_base64)) || "";
+            showCode(it.path, c);
+          }
+        });
+        ul.appendChild(li);
       });
-      wrap.appendChild(btn);
     }
-  });
-}
 
-/* ---------- Projects UI ---------- */
-async function loadProjects(){
-  projListEl.textContent = 'Lade…';
-  try{
-    const res = await fetch('/api/projects');
-    const data = await res.json();
-    const projects = data.projects || [];
-    projListEl.innerHTML = '';
-    projects.forEach(p=>{
-      const item = document.createElement('div');
-      item.className = 'project-item';
-      item.dataset.id = p.id;
-      item.innerHTML = `<div class="p-name">${p.name}</div>
-                        <div class="p-path">${p.path}</div>`;
-      item.addEventListener('click', ()=> selectProject(p.id));
-      projListEl.appendChild(item);
+    function showCode(path, content){
+      el('#code-path').textContent = path;
+      el('#code-content').textContent = content;
+      el('#code-view').classList.remove('hidden');
+    }
+    el('#code-close').onclick = ()=> el('#code-view').classList.add('hidden');
+
+    function switchTab(name){
+      els('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+      els('.tab-pane').forEach(p=>p.classList.toggle('active', p.id==='tab-'+name));
+    }
+
+    function renderProjects(list){
+      const ul = el('#projects-list');
+      ul.innerHTML='';
+      (list||[]).forEach(p=>{
+        const li = document.createElement('li');
+        li.textContent = `${p.name} (ID: ${p.id})`;
+        li.className='clickable';
+        li.onclick = ()=> selectProject(p.id);
+        ul.appendChild(li);
+      });
+    }
+
+    async function selectProject(ref){
+      try{
+        const res = await api('/api/select_project', { project_ref: String(ref), session_id: sid });
+        activeProject = normalizeProject(res.project);
+        el('#active-project').textContent = `${activeProject.name} (ID ${activeProject.id})`;
+        renderProjectMeta(activeProject);
+        renderREADME(activeProject.readme);
+        renderTree(activeProject.root_tree);
+        addMessage('llm', `Projekt ${activeProject.id} (${activeProject.name}) ist jetzt aktiv. Was möchtest du wissen?`);
+      }catch(e){
+        console.error(e);
+        addMessage('llm', 'Fehler beim Setzen des Projekts: ' + e.message);
+      }
+    }
+
+    async function loadProjects(){
+      const res = await GET('/api/projects');
+      renderProjects(res.projects);
+    }
+
+    // -------- Chat ----------
+    async function sendChat(text){
+      addMessage('user', text);
+      const model = modelSelect.value;
+      try{
+        const res = await api('/api/chat', {
+          message: text, session_id: sid, model, max_steps: 8
+        });
+        addMessage('llm', res.answer ?? JSON.stringify(res.error));
+      }catch(e){
+        addMessage('llm', 'Error: ' + e.message);
+      }
+    }
+
+    // -------- Debug ----------
+    async function showConv(){
+      const res = await GET(`/api/debug/conv?sid=${sid}`);
+      el('#trace-content').textContent = JSON.stringify(res, null, 2);
+    }
+    async function showContext(){
+      const res = await GET(`/api/debug/context?sid=${sid}`);
+      el('#trace-content').textContent = JSON.stringify(res, null, 2);
+    }
+
+    // -------- Coding Agent ----------
+    async function startAgent(){
+      if(!activeProject){ alert("Wähle zuerst ein Projekt."); return; }
+      const ns = prompt("Fork Namespace (leer = eigener Account):", "");
+      await api('/api/coding/start', {
+        session_id: sid,
+        source_project: activeProject.id,
+        fork_namespace: ns || null
+      });
+      el('#agent-status-chip').textContent = "Running";
+      el('#agent-status-chip').classList.remove('muted');
+      el('#agent-info').textContent = "Agent gestartet…";
+      if(!pollingAgent) pollAgent();
+    }
+
+    async function pollAgent(){
+      pollingAgent = true;
+      while(true){
+        try{
+          const s = await GET(`/api/coding/status?sid=${sid}`);
+          if(s && s.state){
+            el('#agent-info').textContent = JSON.stringify(s, null, 2);
+            el('#agent-status-chip').textContent = s.state;
+            if(s.state === 'done' || s.state === 'error') break;
+          }
+        }catch(e){ console.warn("agent status error", e); break; }
+        await new Promise(r=>setTimeout(r, 3000));
+      }
+      pollingAgent = false;
+      el('#agent-status-chip').classList.add('muted');
+    }
+
+    // -------- Events ----------
+    modelSelect = el('#model');
+    el('#btn-reset').onclick = async ()=>{
+      await api('/api/chat', {message:"",session_id:sid,reset:true}, "POST");
+      el('#messages').innerHTML='';
+      el('#trace-content').textContent='';
+      addMessage('llm', 'Reset OK');
+    };
+
+    el('#btn-agent-start').onclick = startAgent;
+    el('#btn-show-conv').onclick = showConv;
+    el('#btn-show-context').onclick = showContext;
+
+    els('.tab-btn').forEach(btn=>btn.onclick = ()=>switchTab(btn.dataset.tab));
+    el('#proj-search').oninput = (e)=>{
+      const val = e.target.value.toLowerCase();
+      els('#projects-list li').forEach(li=>{
+        li.style.display = li.textContent.toLowerCase().includes(val) ? '' : 'none';
+      });
+    };
+
+    el('#composer').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const txt = el('#input').value.trim();
+      if(!txt) return;
+      el('#input').value = '';
+      await sendChat(txt);
     });
-  }catch(e){
-    projListEl.textContent = 'Fehler beim Laden.';
-  }
-}
+    el('#input').addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        el('#composer').dispatchEvent(new Event('submit'));
+      }
+    });
 
-async function selectProject(ref){
-  showLoading(true);
-  const res = await fetch('/api/select_project', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ project_ref: String(ref), session_id: SID })
-  });
-  showLoading(false);
-  if(!res.ok){
-    alert('Projekt konnte nicht gesetzt werden.');
-    return;
-  }
-  const data = await res.json();
-  const proj = data.project?.result || data.project || {};
-  highlightProject(ref);
-  fillProjectDetails(proj);
-  appendMessage('assistant', `Projekt **${proj.name || proj.path || ref}** ist jetzt aktiv. Was möchtest du wissen?`);
-}
-
-function highlightProject(id){
-  document.querySelectorAll('.project-item').forEach(el=>{
-    el.classList.toggle('active', el.dataset.id === String(id));
-  });
-}
-
-function fillProjectDetails(desc){
-  ctxTitle.textContent = `Projekt-Details (${desc.name || desc.path || '–'})`;
-  ctxMetaEl.classList.remove('empty');
-  ctxMetaEl.innerHTML = `
-    <table class="meta-table">
-      <tr><th>ID</th><td>${desc.id ?? '-'}</td></tr>
-      <tr><th>Pfad</th><td>${desc.path ?? '-'}</td></tr>
-      <tr><th>URL</th><td>${desc.web_url ? `<a href="${desc.web_url}" target="_blank">${desc.web_url}</a>` : '-'}</td></tr>
-      <tr><th>Branch</th><td>${desc.default_branch ?? '-'}</td></tr>
-    </table>
-  `;
-  ctxReadmeEl.classList.toggle('empty', !desc.readme);
-  ctxReadmeEl.innerHTML = desc.readme ? renderMarkdown(desc.readme) : '–';
-
-  ctxTreeEl.classList.remove('empty');
-  ctxTreeEl.innerHTML = renderTree(desc.root_tree || []);
-}
-
-function renderTree(items){
-  if(!items.length) return '–';
-  const ul = document.createElement('ul');
-  ul.className = 'tree';
-  items.forEach(it=>{
-    const li = document.createElement('li');
-    li.textContent = it.path || it.name;
-    li.className = it.type === 'tree' ? 'folder' : 'file';
-    ul.appendChild(li);
-  });
-  return ul.outerHTML;
-}
-
-/* ---------- Chat ---------- */
-chatForm.addEventListener('submit', async e=>{
-  e.preventDefault();
-  const userText = chatInput.value.trim();
-  if(!userText) return;
-  appendMessage('user', userText);
-  chatInput.value = '';
-  showLoading(true);
-  const res = await fetch('/api/chat', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ message: userText, session_id: SID })
-  });
-  const data = await res.json();
-  showLoading(false);
-  if(data.answer){
-    appendMessage('assistant', data.answer);
-  }else{
-    appendMessage('assistant', '⚠️ Fehler: ' + JSON.stringify(data));
-  }
-});
-
-resetBtn.addEventListener('click', async ()=>{
-  await fetch('/api/chat', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ message: 'Reset', reset: true, session_id: SID })
-  });
-  messagesEl.innerHTML = '';
-  ctxMetaEl.innerHTML = 'Kein Projekt gewählt.'; ctxMetaEl.classList.add('empty');
-  ctxReadmeEl.innerHTML = '–'; ctxReadmeEl.classList.add('empty');
-  ctxTreeEl.innerHTML = '–'; ctxTreeEl.classList.add('empty');
-  document.querySelectorAll('.project-item').forEach(el=>el.classList.remove('active'));
-  appendMessage('assistant','Kontext zurückgesetzt ✅');
-});
-
-chatInput.addEventListener('keydown', e=>{
-  if(e.key === 'Enter' && !e.shiftKey){
-    e.preventDefault();
-    chatForm.requestSubmit();
-  }
-});
-
-/* Debug trace */
-document.querySelector('details summary')?.addEventListener('click', fetchTrace);
-async function fetchTrace(){
-  try{
-    const res = await fetch(`/api/debug/conv?sid=${SID}`);
-    if(res.ok){
-      const json = await res.json();
-      traceBox.textContent = JSON.stringify(json, null, 2);
-    }
-  }catch(_){}
-}
-
-/* Init */
-loadProjects();
-reloadBtn.addEventListener('click', loadProjects);
-</script>
+    // Init
+    addMessage('llm', 'Willkommen! Wähle links ein Projekt oder stelle eine Frage.');
+    loadProjects();
+  </script>
 </body>
 </html>
