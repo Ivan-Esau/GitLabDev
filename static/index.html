@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MCP Chat</title>
+  <link rel="stylesheet" href="/static/styles.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+<main class="layout3">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <h2>Projekte</h2>
+      <button id="reload-projects" title="Projekte neu laden">↻</button>
+    </div>
+    <div id="project-list" class="project-list">Lade…</div>
+  </aside>
+
+  <section class="chat-panel">
+    <header class="topbar">
+      <h1>MCP Chat <span>(Gemini + GitLab)</span></h1>
+      <div class="actions">
+        <button id="reset-btn" title="Kontext löschen">Reset</button>
+      </div>
+    </header>
+
+    <div id="messages" class="messages"></div>
+
+    <form id="chat-form" class="composer">
+      <textarea id="chat-input" placeholder="Nachricht an die LLM… (Enter = senden, Shift+Enter = Zeile)"></textarea>
+      <button type="submit" id="send-btn">Senden</button>
+    </form>
+  </section>
+
+  <aside class="context-panel">
+    <h2 id="ctx-title">Projekt-Details</h2>
+    <div id="ctx-meta" class="ctx-meta empty">Kein Projekt gewählt.</div>
+
+    <h3 class="mt">README</h3>
+    <div id="ctx-readme" class="ctx-readme empty">–</div>
+
+    <h3 class="mt">Repository-Struktur</h3>
+    <div id="ctx-tree" class="ctx-tree empty">–</div>
+
+    <details class="mt small">
+      <summary>Debug-Trace</summary>
+      <pre id="trace-box" class="trace-box"></pre>
+    </details>
+  </aside>
+</main>
+
+<div id="loading" class="loading hidden">…</div>
+
+<script>
+const SID = Math.random().toString(36).slice(2);
+const messagesEl   = document.getElementById('messages');
+const chatForm     = document.getElementById('chat-form');
+const chatInput    = document.getElementById('chat-input');
+const resetBtn     = document.getElementById('reset-btn');
+const loadingEl    = document.getElementById('loading');
+const projListEl   = document.getElementById('project-list');
+const reloadBtn    = document.getElementById('reload-projects');
+const ctxMetaEl    = document.getElementById('ctx-meta');
+const ctxReadmeEl  = document.getElementById('ctx-readme');
+const ctxTreeEl    = document.getElementById('ctx-tree');
+const traceBox     = document.getElementById('trace-box');
+const ctxTitle     = document.getElementById('ctx-title');
+
+function showLoading(on){ loadingEl.classList.toggle('hidden', !on); }
+function renderMarkdown(md){ return marked.parse(md || "", { breaks:true }); }
+
+function appendMessage(role, text){
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.innerHTML = `<div class="name">${role === 'user' ? 'Du' : 'LLM'}</div>
+                   <div class="bubble">${renderMarkdown(text)}</div>`;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  enhanceCodeBlocks(div);
+}
+function enhanceCodeBlocks(root){
+  root.querySelectorAll('pre code').forEach(block=>{
+    const wrap = block.parentElement;
+    if(!wrap.classList.contains('codeblock')){
+      wrap.classList.add('codeblock');
+      const btn = document.createElement('button');
+      btn.textContent = 'Copy';
+      btn.className = 'copy-btn';
+      btn.addEventListener('click', ()=>{
+        navigator.clipboard.writeText(block.innerText);
+        btn.textContent = '✓';
+        setTimeout(()=>btn.textContent='Copy',1000);
+      });
+      wrap.appendChild(btn);
+    }
+  });
+}
+
+/* ---------- Projects UI ---------- */
+async function loadProjects(){
+  projListEl.textContent = 'Lade…';
+  try{
+    const res = await fetch('/api/projects');
+    const data = await res.json();
+    const projects = data.projects || [];
+    projListEl.innerHTML = '';
+    projects.forEach(p=>{
+      const item = document.createElement('div');
+      item.className = 'project-item';
+      item.dataset.id = p.id;
+      item.innerHTML = `<div class="p-name">${p.name}</div>
+                        <div class="p-path">${p.path}</div>`;
+      item.addEventListener('click', ()=> selectProject(p.id));
+      projListEl.appendChild(item);
+    });
+  }catch(e){
+    projListEl.textContent = 'Fehler beim Laden.';
+  }
+}
+
+async function selectProject(ref){
+  showLoading(true);
+  const res = await fetch('/api/select_project', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ project_ref: String(ref), session_id: SID })
+  });
+  showLoading(false);
+  if(!res.ok){
+    alert('Projekt konnte nicht gesetzt werden.');
+    return;
+  }
+  const data = await res.json();
+  const proj = data.project?.result || data.project || {};
+  highlightProject(ref);
+  fillProjectDetails(proj);
+  appendMessage('assistant', `Projekt **${proj.name || proj.path || ref}** ist jetzt aktiv. Was möchtest du wissen?`);
+}
+
+function highlightProject(id){
+  document.querySelectorAll('.project-item').forEach(el=>{
+    el.classList.toggle('active', el.dataset.id === String(id));
+  });
+}
+
+function fillProjectDetails(desc){
+  ctxTitle.textContent = `Projekt-Details (${desc.name || desc.path || '–'})`;
+  ctxMetaEl.classList.remove('empty');
+  ctxMetaEl.innerHTML = `
+    <table class="meta-table">
+      <tr><th>ID</th><td>${desc.id ?? '-'}</td></tr>
+      <tr><th>Pfad</th><td>${desc.path ?? '-'}</td></tr>
+      <tr><th>URL</th><td>${desc.web_url ? `<a href="${desc.web_url}" target="_blank">${desc.web_url}</a>` : '-'}</td></tr>
+      <tr><th>Branch</th><td>${desc.default_branch ?? '-'}</td></tr>
+    </table>
+  `;
+  ctxReadmeEl.classList.toggle('empty', !desc.readme);
+  ctxReadmeEl.innerHTML = desc.readme ? renderMarkdown(desc.readme) : '–';
+
+  ctxTreeEl.classList.remove('empty');
+  ctxTreeEl.innerHTML = renderTree(desc.root_tree || []);
+}
+
+function renderTree(items){
+  if(!items.length) return '–';
+  const ul = document.createElement('ul');
+  ul.className = 'tree';
+  items.forEach(it=>{
+    const li = document.createElement('li');
+    li.textContent = it.path || it.name;
+    li.className = it.type === 'tree' ? 'folder' : 'file';
+    ul.appendChild(li);
+  });
+  return ul.outerHTML;
+}
+
+/* ---------- Chat ---------- */
+chatForm.addEventListener('submit', async e=>{
+  e.preventDefault();
+  const userText = chatInput.value.trim();
+  if(!userText) return;
+  appendMessage('user', userText);
+  chatInput.value = '';
+  showLoading(true);
+  const res = await fetch('/api/chat', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ message: userText, session_id: SID })
+  });
+  const data = await res.json();
+  showLoading(false);
+  if(data.answer){
+    appendMessage('assistant', data.answer);
+  }else{
+    appendMessage('assistant', '⚠️ Fehler: ' + JSON.stringify(data));
+  }
+});
+
+resetBtn.addEventListener('click', async ()=>{
+  await fetch('/api/chat', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ message: 'Reset', reset: true, session_id: SID })
+  });
+  messagesEl.innerHTML = '';
+  ctxMetaEl.innerHTML = 'Kein Projekt gewählt.'; ctxMetaEl.classList.add('empty');
+  ctxReadmeEl.innerHTML = '–'; ctxReadmeEl.classList.add('empty');
+  ctxTreeEl.innerHTML = '–'; ctxTreeEl.classList.add('empty');
+  document.querySelectorAll('.project-item').forEach(el=>el.classList.remove('active'));
+  appendMessage('assistant','Kontext zurückgesetzt ✅');
+});
+
+chatInput.addEventListener('keydown', e=>{
+  if(e.key === 'Enter' && !e.shiftKey){
+    e.preventDefault();
+    chatForm.requestSubmit();
+  }
+});
+
+/* Debug trace */
+document.querySelector('details summary')?.addEventListener('click', fetchTrace);
+async function fetchTrace(){
+  try{
+    const res = await fetch(`/api/debug/conv?sid=${SID}`);
+    if(res.ok){
+      const json = await res.json();
+      traceBox.textContent = JSON.stringify(json, null, 2);
+    }
+  }catch(_){}
+}
+
+/* Init */
+loadProjects();
+reloadBtn.addEventListener('click', loadProjects);
+</script>
+</body>
+</html>
