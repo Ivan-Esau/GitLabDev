@@ -19,6 +19,18 @@ import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
+from app.config import (
+    LLM_PROVIDER,
+    DEFAULT_MODEL,
+    GEMINI_API_KEY,
+    GEMINI_URL_TMPL,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    CUSTOM_LLM_BASE_URL,
+    OLLAMA_BASE_URL,
+    OLLAMA_DEFAULT_MODEL,
+)
+
 load_dotenv()
 mcp = FastMCP("gitlab")
 warnings.filterwarnings("ignore", module="gitlab")
@@ -207,24 +219,96 @@ def create_merge_request(
     })
     return {"iid": mr.iid, "web_url": mr.web_url, "title": mr.title}
 
+# gitlab_mcp.py
+from gitlab import exceptions as gl_exc
+
 @mcp.tool()
 def merge_merge_request(
     project_ref: str,
     mr_iid: int,
-    merge_when_pipeline_succeeds: bool = False,
+    auto_merge: bool | None = None,                 # GitLab ≥17.11
+    merge_when_pipeline_succeeds: bool = False,     # Fallback für ältere Server
     squash: bool = False,
     should_remove_source_branch: bool = False,
-) -> Dict[str, Any]:
+    merge_commit_message: str | None = None,
+    squash_commit_message: str | None = None,
+    sha: str | None = None,
+) -> dict:
     gl = _gitlab_client()
     proj = _project_from_ref(gl, project_ref)
     mr = proj.mergerequests.get(mr_iid, iid=True)
-    mr.merge({
-        "merge_when_pipeline_succeeds": merge_when_pipeline_succeeds,
-        "squash": squash,
-        "should_remove_source_branch": should_remove_source_branch,
-    })
-    mr.refresh()
-    return {"iid": mr.iid, "state": mr.state, "merged_at": getattr(mr, "merged_at", None)}
+
+    payload: dict[str, object] = {}
+    if auto_merge is not None:
+        payload["auto_merge"] = auto_merge
+    else:
+        payload["merge_when_pipeline_succeeds"] = merge_when_pipeline_succeeds
+    if squash:
+        payload["squash"] = True
+    if should_remove_source_branch:
+        payload["should_remove_source_branch"] = True
+    if sha:
+        payload["sha"] = sha
+    if merge_commit_message and merge_commit_message.strip():
+        payload["merge_commit_message"] = merge_commit_message.strip()
+    if squash and squash_commit_message and squash_commit_message.strip():
+        payload["squash_commit_message"] = squash_commit_message.strip()
+
+    def _do_merge(data: dict):
+        mr.merge(**data)  # python-gitlab macht ein PUT /merge mit diesen kwargs
+
+    try:
+        _do_merge(payload)
+    except gl_exc.GitlabError as e:
+        if "merge_commit_message is invalid" in str(e):
+            # Retry ohne Message
+            payload.pop("merge_commit_message", None)
+            try:
+                _do_merge(payload)
+            except gl_exc.GitlabError:
+                # Letzter Versuch mit einer minimalistischen Fallback-Message
+                payload["merge_commit_message"] = (
+                    f"Merge {mr.source_branch} into {mr.target_branch} – {mr.title}"
+                )
+                _do_merge(payload)
+        else:
+            raise
+
+    # <-- Kein mr.refresh() mehr!
+    mr = proj.mergerequests.get(mr_iid, iid=True)  # Zustand neu laden
+
+    return {
+        "iid": mr.iid,
+        "state": mr.state,
+        "merged_at": getattr(mr, "merged_at", None),
+        "web_url": mr.web_url,
+        "merge_commit_sha": getattr(mr, "merge_commit_sha", None),
+    }
+
+@mcp.tool()
+def delete_merge_request(project_ref: str, mr_iid: int) -> Dict[str, Any]:
+    """
+    Löscht einen Merge Request (soft delete laut GitLab-API).
+    Voraussetzungen:
+      - Nur Admins oder Projekt-Owner dürfen löschen (API-Restriktion).
+    Rückgabe: einfache Bestätigung + Web-URL falls noch verfügbar.
+    """
+    gl = _gitlab_client()
+    proj = _project_from_ref(gl, project_ref)
+    try:
+        mr = proj.mergerequests.get(mr_iid, iid=True)
+    except gl_exc.GitlabGetError as e:
+        # Bereits weg oder falsche IID
+        raise ValueError(f"Merge Request {mr_iid} nicht gefunden: {e}") from e
+
+    try:
+        mr.delete()  # python-gitlab Wrapper für DELETE /merge_requests/:iid
+    except gl_exc.GitlabError as e:
+        # z.B. 403 (keine Rechte)
+        raise RuntimeError(f"Löschen fehlgeschlagen: {e}") from e
+
+    return {"iid": mr_iid, "deleted": True}
+
 
 @mcp.tool()
 def list_pipelines(project_ref: str, status: Optional[str] = None, ref: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
@@ -429,6 +513,99 @@ def mirror_issues(
         out.append({"src_iid": i.iid, "dst_iid": ni.iid})
     return out
 
+# --- Issue-Details & Kommentare ------------------------------------------------
+@mcp.tool()
+def get_issue(
+    project_ref: str,
+    issue_iid: int,
+    include_notes: bool = True,
+    include_discussions: bool = False,
+    notes_order_by: str = "created_at",
+    notes_sort: str = "asc",   # asc|desc (GitLab default ist desc)
+    notes_limit: int = 200,
+) -> Dict[str, Any]:
+    """
+    Liefert alle Details eines Issues (Titel, Beschreibung, Labels, usw.).
+    Optional: Kommentare (Notes) und/oder Discussions.
+    """
+    gl = _gitlab_client()
+    proj = _project_from_ref(gl, project_ref)
+    issue = proj.issues.get(issue_iid, iid=True)
+
+    out: Dict[str, Any] = {
+        "iid": issue.iid,
+        "id": issue.id,
+        "title": issue.title,
+        "state": issue.state,
+        "description": issue.description,
+        "author": getattr(issue, "author", None),
+        "assignees": getattr(issue, "assignees", []),
+        "labels": issue.labels,
+        "milestone": getattr(issue, "milestone", None),
+        "created_at": issue.created_at,
+        "updated_at": issue.updated_at,
+        "web_url": issue.web_url,
+    }
+
+    if include_notes:
+        notes = issue.notes.list(
+            get_all=True,
+            order_by=notes_order_by,
+            sort=notes_sort,
+        )
+        out["notes"] = [{
+            "id": n.id,
+            "body": n.body,
+            "author": getattr(n, "author", None),
+            "created_at": n.created_at,
+            "updated_at": n.updated_at,
+            "system": getattr(n, "system", False),
+        } for n in notes][:notes_limit]
+
+    if include_discussions:
+        discs = issue.discussions.list(get_all=True)
+        out["discussions"] = []
+        for d in discs:
+            out["discussions"].append({
+                "id": d.id,
+                "individual_note": getattr(d, "individual_note", False),
+                "notes": [{
+                    "id": nn.id,
+                    "body": nn.body,
+                    "author": getattr(nn, "author", None),
+                    "created_at": nn.created_at,
+                    "updated_at": nn.updated_at,
+                    "system": getattr(nn, "system", False),
+                } for nn in getattr(d, "notes", [])]
+            })
+    return out
+
+
+@mcp.tool()
+def list_issue_notes(
+    project_ref: str,
+    issue_iid: int,
+    order_by: str = "created_at",
+    sort: str = "desc",
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    Gibt nur die Notes (Kommentare) eines Issues zurück – leichter & schneller als get_issue(include_notes=True).
+    """
+    gl = _gitlab_client()
+    proj = _project_from_ref(gl, project_ref)
+    issue = proj.issues.get(issue_iid, iid=True)
+    notes = issue.notes.list(get_all=True, order_by=order_by, sort=sort)
+    return [{
+        "id": n.id,
+        "body": n.body,
+        "author": getattr(n, "author", None),
+        "created_at": n.created_at,
+        "updated_at": n.updated_at,
+        "system": getattr(n, "system", False),
+    } for n in notes][:limit]
+
+
 @mcp.tool()
 def wait_for_pipeline(
     project_ref: str | int,
@@ -466,10 +643,11 @@ def get_job_log(project_ref: str | int, job_id: int) -> Dict[str, Any]:
 
 # ---------------------- Generisches LLM-Tool ----------------------
 @mcp.tool()
-def llm_generate(prompt: str, model: Optional[str] = None, temperature: float = 0.2) -> str:
+def llm_generate(prompt: str,
+                 model: str | None = None,
+                 temperature: float = 0.2) -> str:
     """
-    Einfache Text-Generierung über den in .env gesetzten Provider.
-    Kein Tool-Calling, nur reiner Prompt -> Text.
+    Einfaches Prompt->Text Tool ohne Tool-Calling.
     """
     provider = LLM_PROVIDER
     model = model or DEFAULT_MODEL
@@ -489,19 +667,17 @@ def llm_generate(prompt: str, model: Optional[str] = None, temperature: float = 
         except (KeyError, IndexError):
             return json.dumps(data, ensure_ascii=False)
 
-    elif provider == "openai":
+    if provider == "openai":
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY fehlt")
-        url = f"{OPENAI_BASE_URL}/chat/completions"
+        url = f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions"
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-        }
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {OPENAI_API_KEY}"}
         with httpx.Client(timeout=30) as client:
             resp = client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
@@ -511,7 +687,22 @@ def llm_generate(prompt: str, model: Optional[str] = None, temperature: float = 
         except (KeyError, IndexError):
             return json.dumps(data, ensure_ascii=False)
 
-    elif provider == "custom":
+    if provider == "ollama":
+        url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate"
+        payload = {
+            "model": model or OLLAMA_DEFAULT_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": temperature},
+        }
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        # /api/generate streams normally; non-stream returns 'response'
+        return data.get("response", json.dumps(data, ensure_ascii=False))
+
+    if provider == "custom":
         if not CUSTOM_LLM_BASE_URL:
             raise RuntimeError("CUSTOM_LLM_BASE_URL fehlt")
         url = CUSTOM_LLM_BASE_URL
@@ -520,11 +711,9 @@ def llm_generate(prompt: str, model: Optional[str] = None, temperature: float = 
             resp = client.post(url, json=payload)
         resp.raise_for_status()
         data = resp.json()
-        # Erwartet: {"text": "..."}
         return data.get("text", json.dumps(data, ensure_ascii=False))
 
-    else:
-        raise RuntimeError(f"LLM_PROVIDER '{provider}' nicht unterstützt.")
+    raise RuntimeError(f"LLM_PROVIDER '{provider}' nicht unterstützt.")
 
 
 if __name__ == "__main__":

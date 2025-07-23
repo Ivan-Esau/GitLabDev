@@ -18,19 +18,25 @@ server_params = StdioServerParameters(
 )
 
 # ---------------- LLM Settings ----------------
-LLM_PROVIDER     = os.getenv("LLM_PROVIDER", "gemini").lower()  # gemini | openai | custom ...
-DEFAULT_MODEL    = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash")
+# Unterstützte Provider: gemini | openai | ollama | custom
+LLM_PROVIDER      = os.getenv("LLM_PROVIDER", "gemini").lower()
+DEFAULT_MODEL     = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash")
+LLM_TIMEOUT       = int(os.getenv("LLM_TIMEOUT", "60"))
 
 # Gemini
-GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")
-GEMINI_TOOL_MODE = os.getenv("GEMINI_TOOL_MODE", "AUTO")  # AUTO | ANY | NONE
-GEMINI_URL_TMPL  = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
+GEMINI_TOOL_MODE  = os.getenv("GEMINI_TOOL_MODE", "AUTO")  # AUTO | ANY | NONE
+GEMINI_URL_TMPL   = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-# OpenAI (optional)
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL  = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+# OpenAI (optional / remote)
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL   = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
-# Custom (optional)
+# Ollama (lokal)
+OLLAMA_BASE_URL       = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+OLLAMA_DEFAULT_MODEL  = os.getenv("OLLAMA_DEFAULT_MODEL", "deepseek-r1:7b")
+
+# Eigenes Backend (falls benötigt)
 CUSTOM_LLM_BASE_URL = os.getenv("CUSTOM_LLM_BASE_URL", "")
 
 # ---------------- System Prompt ----------------

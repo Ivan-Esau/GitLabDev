@@ -1,43 +1,66 @@
-import logging
+from __future__ import annotations
+
+import sys
+import asyncio
+from importlib import import_module
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from .routes import chat, projects, tools, debug, coding
+from fastapi.middleware.cors import CORSMiddleware
 
+from .config import ROOT
 from .mcp_client import init_mcp, close_mcp
-from .routes import chat, projects, tools, debug
 
-log = logging.getLogger("uvicorn.error")
+# Windows Event-Loop Fix
+if sys.platform.startswith("win"):
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
 
-ROOT = Path(__file__).resolve().parent.parent
-STATIC = ROOT / "static"
+app = FastAPI(title="MCP Studio")
 
-app = FastAPI()
+# CORS (optional)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Static frontend
-app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+STATIC_DIR = ROOT / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+@app.on_event("startup")
+async def on_startup() -> None:
+    await init_mcp(app)
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    await close_mcp(app)
+
+API_PREFIX = "/api"
+ROUTERS = (
+    "routes.chat",
+    "routes.projects",
+    "routes.debug",
+    "routes.coding",
+    "routes.tools",
+    "routes.local_llm",   # <--- neu
+)
+for mod_path in ROUTERS:
+    try:
+        mod = import_module(f"app.{mod_path}")
+        app.include_router(mod.router, prefix=API_PREFIX)
+    except Exception as e:
+        print(f"[WARN] Router {mod_path} nicht geladen: {e}", file=sys.stderr)
 
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC / "index.html"))
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
-# API routes
-app.include_router(chat.router,     prefix="/api")
-app.include_router(projects.router, prefix="/api")
-app.include_router(tools.router,    prefix="/api")
-app.include_router(debug.router,    prefix="/api")
-app.include_router(coding.router, prefix="/api")
-
-@app.on_event("startup")
-async def on_startup():
-    await init_mcp(app)
-    # Coding-Agent Status Speicher
-    app.state.coding_status = {}
-    log.info("Application startup complete.")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await close_mcp(app)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

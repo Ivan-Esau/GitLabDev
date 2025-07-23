@@ -13,7 +13,14 @@ async def chat(req: ChatRequest, request: Request):
         app.state.conversations[req.session_id] = []
         app.state.contexts[req.session_id] = {}
     try:
-        answer = await run_agent(app, req.message, req.max_steps, req.model, req.session_id)
+        answer = await run_agent(
+            app,
+            req.message,
+            req.max_steps,
+            req.model,
+            req.session_id,
+            provider=req.provider,
+        )
         return {"answer": answer}
     except httpx.HTTPStatusError as e:
         return {"error": e.response.text}

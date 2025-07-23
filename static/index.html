@@ -13,11 +13,21 @@
     <div class="project-chip" id="active-project">Kein Projekt gewählt</div>
 
     <div class="model-select">
+      <label for="provider">Provider:</label>
+      <select id="provider">
+        <option value="gemini" selected>gemini</option>
+        <option value="openai">openai</option>
+        <option value="ollama">ollama (lokal)</option>
+      </select>
+
       <label for="model">Model:</label>
       <select id="model">
         <option value="gemini-2.0-flash" selected>gemini-2.0-flash</option>
         <option value="gpt-4o-mini">gpt-4o-mini</option>
+        <option value="deepseek-r1:7b">deepseek-r1:7b (ollama)</option>
       </select>
+
+      <button id="btn-pull-model" title="Lokales Modell laden">Pull</button>
     </div>
 
     <button id="btn-reset" title="Konversation & Kontext zurücksetzen">Reset</button>
@@ -113,6 +123,7 @@
     const sid = Math.random().toString(36).slice(2);
     let activeProject = null;
     let modelSelect = null;
+    let providerSelect = null;
     let pollingAgent = false;
 
     async function api(path, body, method = "POST") {
@@ -122,10 +133,14 @@
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     }
-    const GET = (p) => fetch(p).then(r => r.json());
+    const GET = async (p) => {
+      const r = await fetch(p);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    };
 
     function el(q){ return document.querySelector(q); }
-    function els(q){ return [...document.querySelectorAll(q)]; }
+    function els(q){ return Array.from(document.querySelectorAll(q)); }
 
     function escapeHTML(s){
       if (s == null) return "";
@@ -165,9 +180,7 @@ Branch: ${escapeHTML(desc.default_branch)}
       el('#proj-meta-content').innerHTML = t;
     }
 
-    function renderREADME(txt){
-      el('#readme-content').textContent = txt || '–';
-    }
+    function renderREADME(txt){ el('#readme-content').textContent = txt || '–'; }
 
     function renderTree(tree){
       const ul = el('#tree-list');
@@ -244,14 +257,32 @@ Branch: ${escapeHTML(desc.default_branch)}
     // -------- Chat ----------
     async function sendChat(text){
       addMessage('user', text);
-      const model = modelSelect.value;
+      const model    = modelSelect.value;
+      const provider = providerSelect.value;
       try{
         const res = await api('/api/chat', {
-          message: text, session_id: sid, model, max_steps: 8
+          message: text,
+          session_id: sid,
+          model,
+          provider,
+          max_steps: 8
         });
         addMessage('llm', res.answer ?? JSON.stringify(res.error));
       }catch(e){
         addMessage('llm', 'Error: ' + e.message);
+      }
+    }
+
+    // -------- Local LLM ----------
+    async function pullLocalModel(){
+      const m = modelSelect.value;
+      if(!m.includes(':')) { alert('Bitte ein Ollama-Modell auswählen (z.B. deepseek-r1:7b)'); return; }
+      try{
+        addMessage('llm', `Pull "${m}"...`);
+        const res = await api(`/api/local_llm/pull?model=${encodeURIComponent(m)}`, null, "POST");
+        addMessage('llm', `Pulled: ${m}`);
+      }catch(e){
+        addMessage('llm', 'Pull-Fehler: ' + e.message);
       }
     }
 
@@ -298,7 +329,10 @@ Branch: ${escapeHTML(desc.default_branch)}
     }
 
     // -------- Events ----------
-    modelSelect = el('#model');
+    modelSelect    = el('#model');
+    providerSelect = el('#provider');
+    el('#btn-pull-model').onclick = pullLocalModel;
+
     el('#btn-reset').onclick = async ()=>{
       await api('/api/chat', {message:"",session_id:sid,reset:true}, "POST");
       el('#messages').innerHTML='';
@@ -307,8 +341,8 @@ Branch: ${escapeHTML(desc.default_branch)}
     };
 
     el('#btn-agent-start').onclick = startAgent;
-    el('#btn-show-conv').onclick = showConv;
-    el('#btn-show-context').onclick = showContext;
+    el('#btn-show-conv').onclick   = showConv;
+    el('#btn-show-context').onclick= showContext;
 
     els('.tab-btn').forEach(btn=>btn.onclick = ()=>switchTab(btn.dataset.tab));
     el('#proj-search').oninput = (e)=>{
