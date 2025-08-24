@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>GitLab MCP Studio</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">GitLab MCP Studio</div>
+
+    <div class="project-chip" id="active-project">
+      <span class="project-icon">📁</span>
+      <span>Kein Projekt gewählt</span>
+    </div>
+
+    <div class="model-select">
+      <label for="provider">🤖 Provider:</label>
+      <select id="provider">
+        <option value="gemini" selected>Gemini</option>
+        <option value="openai">OpenAI</option>
+        <option value="ollama">Ollama (Local)</option>
+      </select>
+
+      <label for="model">Model:</label>
+      <select id="model">
+        <option value="gemini-2.0-flash" selected>gemini-2.0-flash</option>
+        <option value="gpt-4o-mini">gpt-4o-mini</option>
+        <option value="deepseek-r1:7b">deepseek-r1:7b</option>
+      </select>
+
+      <button id="btn-pull-model" title="Lokales Modell laden">⬇️ Pull</button>
+    </div>
+
+    <div class="topbar-actions">
+      <button id="btn-reset" title="Konversation & Kontext zurücksetzen">🔄 Reset</button>
+      
+      <div class="agent-controls">
+        <button id="btn-agent-start">⚙️ Agent</button>
+        <span id="agent-status-chip" class="chip muted">Idle</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- LEFT SIDEBAR - Navigation -->
+    <aside class="left">
+      <div class="sidebar-header">
+        <input id="proj-search" type="search" placeholder="🔍 Projekte durchsuchen..." />
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-tab="projects">
+          <span class="nav-icon">📁</span>
+          <span class="nav-label">Projekte</span>
+          <span class="nav-count" id="projects-count">0</span>
+        </button>
+        <button class="nav-item" data-tab="issues">
+          <span class="nav-icon">📝</span>
+          <span class="nav-label">Issues</span>
+          <span class="nav-count" id="issues-count">0</span>
+        </button>
+        <button class="nav-item" data-tab="mrs">
+          <span class="nav-icon">🔄</span>
+          <span class="nav-label">Merge Requests</span>
+          <span class="nav-count" id="mrs-count">0</span>
+        </button>
+        <button class="nav-item" data-tab="pipelines">
+          <span class="nav-icon">⚙️</span>
+          <span class="nav-label">Pipelines</span>
+          <span class="nav-count" id="pipelines-count">0</span>
+        </button>
+      </nav>
+
+      <div class="tab-content">
+        <div id="tab-projects" class="tab-pane active">
+          <div class="tab-header">
+            <h3>Projekte</h3>
+            <button id="refresh-projects" class="btn-icon" title="Projekte aktualisieren">🔄</button>
+          </div>
+          <ul id="projects-list" class="content-list"></ul>
+        </div>
+        <div id="tab-issues" class="tab-pane">
+          <div class="tab-header">
+            <h3>Issues</h3>
+            <div class="tab-actions">
+              <select id="issues-filter" class="filter-select">
+                <option value="opened">Offen</option>
+                <option value="closed">Geschlossen</option>
+                <option value="all">Alle</option>
+              </select>
+              <button id="refresh-issues" class="btn-icon" title="Issues aktualisieren">🔄</button>
+            </div>
+          </div>
+          <div id="issues-empty" class="empty-state">Wählen Sie ein Projekt aus</div>
+          <ul id="issues-list" class="content-list"></ul>
+        </div>
+        <div id="tab-mrs" class="tab-pane">
+          <div class="tab-header">
+            <h3>Merge Requests</h3>
+            <div class="tab-actions">
+              <select id="mrs-filter" class="filter-select">
+                <option value="opened">Offen</option>
+                <option value="merged">Zusammengefügt</option>
+                <option value="closed">Geschlossen</option>
+                <option value="all">Alle</option>
+              </select>
+              <button id="refresh-mrs" class="btn-icon" title="MRs aktualisieren">🔄</button>
+            </div>
+          </div>
+          <div id="mrs-empty" class="empty-state">Wählen Sie ein Projekt aus</div>
+          <ul id="mrs-list" class="content-list"></ul>
+        </div>
+        <div id="tab-pipelines" class="tab-pane">
+          <div class="tab-header">
+            <h3>Pipelines</h3>
+            <button id="refresh-pipelines" class="btn-icon" title="Pipelines aktualisieren">🔄</button>
+          </div>
+          <div id="pipes-empty" class="empty-state">Wählen Sie ein Projekt aus</div>
+          <ul id="pipes-list" class="content-list"></ul>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER - Main Content -->
+    <main class="center">
+      <div class="chat-header">
+        <h2>GitLab AI Assistant</h2>
+        <div class="chat-status" id="chat-status">
+          <span class="status-indicator"></span>
+          <span class="status-text">Bereit</span>
+        </div>
+      </div>
+      
+      <div id="messages" class="chat"></div>
+
+      <form id="composer">
+        <div class="composer-header">
+          <span class="composer-label">💬 Nachricht an GitLab AI</span>
+          <div class="composer-actions">
+            <button type="button" id="attach-context" class="btn-ghost" title="Projektkontext anhängen">📄</button>
+            <button type="button" id="clear-input" class="btn-ghost" title="Eingabe löschen">🗑️</button>
+          </div>
+        </div>
+        <textarea id="input" placeholder="Fragen Sie nach Projekten, Issues, Code oder lassen Sie sich bei der Entwicklung helfen... (Shift+Enter für Zeilenumbruch)"></textarea>
+        <div class="composer-footer">
+          <div class="composer-info">
+            <small class="muted">Verwenden Sie natürliche Sprache für GitLab-Operationen</small>
+          </div>
+          <button type="submit" class="btn-primary">
+            <span>➤ Senden</span>
+          </button>
+        </div>
+      </form>
+
+      <section id="code-view" class="code-view hidden">
+        <header>
+          <div class="code-header-left">
+            <span class="code-icon">📄</span>
+            <span id="code-path"></span>
+          </div>
+          <div class="code-header-actions">
+            <button id="code-copy" class="btn-ghost" title="Code kopieren">📋</button>
+            <button id="code-close" class="btn-ghost" title="Schließen">×</button>
+          </div>
+        </header>
+        <pre id="code-content"></pre>
+      </section>
+    </main>
+
+    <!-- RIGHT SIDEBAR - Project Info -->
+    <aside class="right">
+      <div class="sidebar-header">
+        <h3>Projektinformationen</h3>
+      </div>
+
+      <section id="proj-meta" class="info-panel">
+        <div class="panel-header">
+          <span class="panel-icon">📁</span>
+          <h4>Projekt</h4>
+        </div>
+        <div id="proj-meta-content" class="panel-content">
+          <div class="empty-state">Kein Projekt ausgewählt</div>
+        </div>
+      </section>
+
+      <section id="readme" class="info-panel">
+        <div class="panel-header">
+          <span class="panel-icon">📄</span>
+          <h4>README</h4>
+          <button id="readme-refresh" class="btn-icon" title="README aktualisieren">🔄</button>
+        </div>
+        <div class="panel-content">
+          <pre id="readme-content" class="readme-content">Keine README verfügbar</pre>
+        </div>
+      </section>
+
+      <section id="tree" class="info-panel">
+        <div class="panel-header">
+          <span class="panel-icon">🌳</span>
+          <h4>Repository-Struktur</h4>
+          <button id="tree-refresh" class="btn-icon" title="Struktur aktualisieren">🔄</button>
+        </div>
+        <div class="panel-content">
+          <ul id="tree-list" class="tree-list"></ul>
+        </div>
+      </section>
+
+      <section id="agent-panel" class="info-panel">
+        <div class="panel-header">
+          <span class="panel-icon">⚙️</span>
+          <h4>Coding-Agent</h4>
+        </div>
+        <div class="panel-content">
+          <div id="agent-info" class="agent-status">Noch nicht gestartet</div>
+        </div>
+      </section>
+
+      <details class="debug-panel">
+        <summary>
+          <span class="debug-icon">🔍</span>
+          Debug & Trace
+        </summary>
+        <div class="debug-content">
+          <div class="debug-actions">
+            <button id="btn-show-conv" class="btn-debug">Konversation</button>
+            <button id="btn-show-context" class="btn-debug">Kontext</button>
+          </div>
+          <pre id="trace-content" class="trace-content"></pre>
+        </div>
+      </details>
+    </aside>
+  </div>
+
+  <script type="module">
+    // ====== Utility ======
+    const sid = Math.random().toString(36).slice(2);
+    let activeProject = null;
+    let modelSelect = null;
+    let providerSelect = null;
+    let pollingAgent = false;
+
+    async function api(path, body, method = "POST") {
+      const opt = { method, headers: { "Content-Type": "application/json" } };
+      if (body) opt.body = JSON.stringify(body);
+      const r = await fetch(path, opt);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+    const GET = async (p) => {
+      const r = await fetch(p);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    };
+
+    function el(q){ return document.querySelector(q); }
+    function els(q){ return Array.from(document.querySelectorAll(q)); }
+
+    function escapeHTML(s){
+      if (s == null) return "";
+      return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    }
+
+    function normalizeProject(p){
+      if(!p || typeof p !== 'object') return {};
+      return {
+        id:             p.id ?? p.project_id ?? p.result?.id,
+        name:           p.name ?? p.name_with_namespace ?? p.path ?? p.path_with_namespace ?? "Unbekannt",
+        path:           p.path ?? p.path_with_namespace ?? "",
+        web_url:        p.web_url ?? "",
+        default_branch: p.default_branch ?? "main",
+        readme:         p.readme ?? "",
+        root_tree:      Array.isArray(p.root_tree) ? p.root_tree : []
+      };
+    }
+
+    function addMessage(role, text){
+      const box = el('#messages');
+      const wrap = document.createElement('div');
+      wrap.className = 'msg ' + role;
+      wrap.innerHTML = `<div class="bubble">${escapeHTML(text)}</div>`;
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function renderProjectMeta(desc){
+      const path = desc.path || "-";
+      const t = `
+        <div class="meta-item">
+          <strong>ID:</strong> <code>${escapeHTML(desc.id)}</code>
+        </div>
+        <div class="meta-item">
+          <strong>Pfad:</strong> <code>${escapeHTML(path)}</code>
+        </div>
+        <div class="meta-item">
+          <strong>Default Branch:</strong> <code>${escapeHTML(desc.default_branch)}</code>
+        </div>
+        <div class="meta-item">
+          <strong>GitLab URL:</strong><br>
+          <a href="${escapeHTML(desc.web_url)}" target="_blank" class="external-link">
+            ${escapeHTML(desc.web_url)} ↗️
+          </a>
+        </div>
+      `;
+      el('#proj-meta-content').innerHTML = t;
+    }
+
+    function renderREADME(txt){ el('#readme-content').textContent = txt || '–'; }
+
+    function renderTree(tree){
+      const ul = el('#tree-list');
+      ul.innerHTML = '';
+      if(!tree || !tree.length){
+        ul.innerHTML = '<li class="empty-state">Keine Dateien gefunden</li>';
+        return;
+      }
+      tree.forEach(it=>{
+        const li = document.createElement('li');
+        li.className = it.type;
+        li.textContent = it.path;
+        li.addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          if(it.type === 'blob'){
+            try {
+              const file = await api(`/api/tool/get_file`, {arguments:{
+                project_ref: String(activeProject.id),
+                file_path: it.path,
+                ref: activeProject.default_branch,
+                decode: true
+              }});
+              const c = (file.result && (file.result.content || file.result.content_base64)) || "";
+              showCode(it.path, c);
+            } catch(e) {
+              addMessage('llm', `Fehler beim Laden der Datei: ${e.message}`);
+            }
+          }
+        });
+        ul.appendChild(li);
+      });
+    }
+
+    function showCode(path, content){
+      el('#code-path').textContent = path;
+      el('#code-content').textContent = content;
+      el('#code-view').classList.remove('hidden');
+    }
+    
+    // Code view event handlers
+    el('#code-close').onclick = ()=> el('#code-view').classList.add('hidden');
+    el('#code-copy').onclick = async ()=> {
+      try {
+        await navigator.clipboard.writeText(el('#code-content').textContent);
+        // Briefly show feedback
+        const btn = el('#code-copy');
+        const original = btn.innerHTML;
+        btn.innerHTML = '✅';
+        setTimeout(() => btn.innerHTML = original, 1000);
+      } catch(e) {
+        console.error('Could not copy:', e);
+      }
+    };
+
+    function switchTab(name){
+      els('.nav-item').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+      els('.tab-pane').forEach(p=>p.classList.toggle('active', p.id==='tab-'+name));
+    }
+
+    function renderProjects(list){
+      const ul = el('#projects-list');
+      ul.innerHTML='';
+      (list||[]).forEach(p=>{
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <div class="project-item">
+            <div class="project-name">📁 ${escapeHTML(p.name)}</div>
+            <div class="project-id">ID: ${p.id}</div>
+          </div>
+        `;
+        li.className='clickable';
+        li.onclick = ()=> selectProject(p.id);
+        ul.appendChild(li);
+      });
+      // Update count
+      el('#projects-count').textContent = (list||[]).length;
+    }
+
+    async function selectProject(ref){
+      try{
+        const res = await api('/api/select_project', { project_ref: String(ref), session_id: sid });
+        activeProject = normalizeProject(res.project);
+        el('#active-project').innerHTML = `
+          <span class="project-icon">📁</span>
+          <span>${activeProject.name}</span>
+          <small>(ID: ${activeProject.id})</small>
+        `;
+        renderProjectMeta(activeProject);
+        renderREADME(activeProject.readme);
+        renderTree(activeProject.root_tree);
+        addMessage('llm', `Projekt ${activeProject.id} (${activeProject.name}) ist jetzt aktiv. Was möchtest du wissen?`);
+        
+        // Load project-specific data for other tabs
+        await Promise.all([
+          loadProjectIssues(),
+          loadProjectMRs(),
+          loadProjectPipelines()
+        ]);
+      }catch(e){
+        console.error(e);
+        addMessage('llm', 'Fehler beim Setzen des Projekts: ' + e.message);
+      }
+    }
+
+    async function loadProjects(){
+      const res = await GET('/api/projects');
+      renderProjects(res.projects);
+    }
+
+    async function loadProjectIssues(){
+      if (!activeProject) return;
+      try {
+        const res = await api('/api/tool/list_issues', {
+          arguments: {
+            project_ref: String(activeProject.id),
+            state: 'opened',
+            limit: 50
+          }
+        });
+        // Check if result is an error message string
+        if (typeof res.result === 'string' && res.result.includes('Error')) {
+          console.warn('Issues API returned error:', res.result);
+          el('#issues-empty').textContent = res.result;
+          el('#issues-empty').style.display = 'block';
+          return;
+        }
+        const issues = res.result || [];
+        renderIssues(issues);
+        el('#issues-empty').style.display = (issues.length > 0) ? 'none' : 'block';
+        if (issues.length === 0) {
+          el('#issues-empty').textContent = 'Keine Issues gefunden';
+        }
+      } catch(e) {
+        console.error('Failed to load issues:', e);
+        el('#issues-empty').textContent = 'Fehler beim Laden der Issues';
+        el('#issues-empty').style.display = 'block';
+      }
+    }
+
+    async function loadProjectMRs(){
+      if (!activeProject) return;
+      try {
+        const res = await api('/api/tool/list_merge_requests', {
+          arguments: {
+            project_ref: String(activeProject.id),
+            state: 'opened',
+            limit: 50
+          }
+        });
+        // Check if result is an error message string
+        if (typeof res.result === 'string' && res.result.includes('Error')) {
+          console.warn('MRs API returned error:', res.result);
+          el('#mrs-empty').textContent = res.result;
+          el('#mrs-empty').style.display = 'block';
+          return;
+        }
+        const mrs = res.result || [];
+        renderMRs(mrs);
+        el('#mrs-empty').style.display = (mrs.length > 0) ? 'none' : 'block';
+        if (mrs.length === 0) {
+          el('#mrs-empty').textContent = 'Keine Merge Requests gefunden';
+        }
+      } catch(e) {
+        console.error('Failed to load MRs:', e);
+        el('#mrs-empty').textContent = 'Fehler beim Laden der Merge Requests';
+        el('#mrs-empty').style.display = 'block';
+      }
+    }
+
+    async function loadProjectPipelines(){
+      if (!activeProject) return;
+      try {
+        const res = await api('/api/tool/list_pipelines', {
+          arguments: {
+            project_ref: String(activeProject.id),
+            limit: 20
+          }
+        });
+        // Check if result is an error message string
+        if (typeof res.result === 'string' && res.result.includes('Error')) {
+          console.warn('Pipelines API returned error:', res.result);
+          el('#pipes-empty').textContent = res.result;
+          el('#pipes-empty').style.display = 'block';
+          return;
+        }
+        const pipelines = res.result || [];
+        renderPipelines(pipelines);
+        el('#pipes-empty').style.display = (pipelines.length > 0) ? 'none' : 'block';
+        if (pipelines.length === 0) {
+          el('#pipes-empty').textContent = 'Keine Pipelines gefunden';
+        }
+      } catch(e) {
+        console.error('Failed to load pipelines:', e);
+        el('#pipes-empty').textContent = 'Fehler beim Laden der Pipelines';
+        el('#pipes-empty').style.display = 'block';
+      }
+    }
+
+    function renderIssues(issues){
+      const ul = el('#issues-list');
+      ul.innerHTML = '';
+      issues.forEach(issue => {
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <div class="issue-item">
+            <div class="issue-header">
+              <span class="issue-title">#${issue.iid}: ${escapeHTML(issue.title)}</span>
+              <span class="issue-state ${issue.state}">${issue.state}</span>
+            </div>
+            <div class="issue-meta">
+              <small class="issue-author">👤 ${escapeHTML(issue.author?.name || 'Unknown')}</small>
+              ${issue.labels && issue.labels.length > 0 ? `<div class="issue-labels">${issue.labels.map(l => `<span class="label-tag">${escapeHTML(l.name || l)}</span>`).join('')}</div>` : ''}
+            </div>
+          </div>
+        `;
+        li.className = 'clickable';
+        li.onclick = () => {
+          addMessage('user', `Zeige mir Details zu Issue #${issue.iid}: ${issue.title}`);
+          sendChat(`Zeige mir Details zu Issue #${issue.iid}: ${issue.title}`);
+        };
+        ul.appendChild(li);
+      });
+      // Update count
+      el('#issues-count').textContent = issues.length;
+    }
+
+    function renderMRs(mrs){
+      const ul = el('#mrs-list');
+      ul.innerHTML = '';
+      mrs.forEach(mr => {
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <div class="mr-item">
+            <div class="mr-header">
+              <span class="mr-title">!${mr.iid}: ${escapeHTML(mr.title)}</span>
+              <span class="mr-state ${mr.state}">${mr.state}</span>
+            </div>
+            <div class="mr-meta">
+              <small class="mr-author">👤 ${escapeHTML(mr.author?.name || 'Unknown')}</small>
+              ${mr.source_branch && mr.target_branch ? `<div class="mr-branches">${escapeHTML(mr.source_branch)} → ${escapeHTML(mr.target_branch)}</div>` : ''}
+            </div>
+          </div>
+        `;
+        li.className = 'clickable';
+        li.onclick = () => {
+          addMessage('user', `Zeige mir Details zu Merge Request !${mr.iid}: ${mr.title}`);
+          sendChat(`Zeige mir Details zu Merge Request !${mr.iid}: ${mr.title}`);
+        };
+        ul.appendChild(li);
+      });
+      // Update count
+      el('#mrs-count').textContent = mrs.length;
+    }
+
+    function renderPipelines(pipelines){
+      const ul = el('#pipes-list');
+      ul.innerHTML = '';
+      pipelines.forEach(pipeline => {
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <div class="pipeline-item">
+            <span class="pipeline-id">#${pipeline.id}</span>
+            <span class="pipeline-status ${pipeline.status}">${pipeline.status}</span>
+            <span class="pipeline-ref">${escapeHTML(pipeline.ref || 'main')}</span>
+            <small class="pipeline-date">📅 ${new Date(pipeline.created_at).toLocaleDateString()}</small>
+          </div>
+        `;
+        li.className = 'clickable';
+        li.onclick = () => {
+          addMessage('user', `Zeige mir Details zu Pipeline #${pipeline.id} (${pipeline.status})`);
+          sendChat(`Zeige mir Details zu Pipeline #${pipeline.id} (${pipeline.status})`);
+        };
+        ul.appendChild(li);
+      });
+      // Update count
+      el('#pipelines-count').textContent = pipelines.length;
+    }
+
+    // -------- Chat ----------
+    async function sendChat(text, skipAddMessage = false){
+      if (!skipAddMessage) {
+        addMessage('user', text);
+      }
+      
+      // Update chat status
+      el('#chat-status .status-text').textContent = 'Verarbeitung...';
+      el('#chat-status .status-indicator').style.background = 'var(--gl-orange-500)';
+      
+      const model    = modelSelect.value;
+      const provider = providerSelect.value;
+      try{
+        const res = await api('/api/chat', {
+          message: text,
+          session_id: sid,
+          model,
+          provider,
+          max_steps: 8
+        });
+        addMessage('llm', res.answer ?? JSON.stringify(res.error));
+        
+        // Update chat status back to ready
+        el('#chat-status .status-text').textContent = 'Bereit';
+        el('#chat-status .status-indicator').style.background = 'var(--gl-green-500)';
+      }catch(e){
+        addMessage('llm', 'Error: ' + e.message);
+        
+        // Update chat status to error
+        el('#chat-status .status-text').textContent = 'Fehler';
+        el('#chat-status .status-indicator').style.background = 'var(--gl-red-500)';
+        
+        // Reset to ready after 3 seconds
+        setTimeout(() => {
+          el('#chat-status .status-text').textContent = 'Bereit';
+          el('#chat-status .status-indicator').style.background = 'var(--gl-green-500)';
+        }, 3000);
+      }
+    }
+
+    // -------- Local LLM ----------
+    async function pullLocalModel(){
+      const m = modelSelect.value;
+      if(!m.includes(':')) { alert('Bitte ein Ollama-Modell auswählen (z.B. deepseek-r1:7b)'); return; }
+      try{
+        addMessage('llm', `Pull "${m}"...`);
+        const res = await api(`/api/local_llm/pull?model=${encodeURIComponent(m)}`, null, "POST");
+        addMessage('llm', `Pulled: ${m}`);
+      }catch(e){
+        addMessage('llm', 'Pull-Fehler: ' + e.message);
+      }
+    }
+
+    // -------- Debug ----------
+    async function showConv(){
+      const res = await GET(`/api/debug/conv?sid=${sid}`);
+      el('#trace-content').textContent = JSON.stringify(res, null, 2);
+    }
+    async function showContext(){
+      const res = await GET(`/api/debug/context?sid=${sid}`);
+      el('#trace-content').textContent = JSON.stringify(res, null, 2);
+    }
+
+    // -------- Coding Agent ----------
+    async function startAgent(){
+      if(!activeProject){ alert("Wähle zuerst ein Projekt."); return; }
+      const ns = prompt("Fork Namespace (leer = eigener Account):", "");
+      await api('/api/coding/start', {
+        session_id: sid,
+        source_project: activeProject.id,
+        fork_namespace: ns || null
+      });
+      el('#agent-status-chip').textContent = "Running";
+      el('#agent-status-chip').classList.remove('muted');
+      el('#agent-info').textContent = "Agent gestartet…";
+      if(!pollingAgent) pollAgent();
+    }
+
+    async function pollAgent(){
+      pollingAgent = true;
+      while(true){
+        try{
+          const s = await GET(`/api/coding/status?sid=${sid}`);
+          if(s && s.state){
+            el('#agent-info').textContent = JSON.stringify(s, null, 2);
+            el('#agent-status-chip').textContent = s.state;
+            if(s.state === 'done' || s.state === 'error') break;
+          }
+        }catch(e){ console.warn("agent status error", e); break; }
+        await new Promise(r=>setTimeout(r, 3000));
+      }
+      pollingAgent = false;
+      el('#agent-status-chip').classList.add('muted');
+    }
+
+    // -------- Events ----------
+    modelSelect    = el('#model');
+    providerSelect = el('#provider');
+    el('#btn-pull-model').onclick = pullLocalModel;
+
+    el('#btn-reset').onclick = async ()=>{
+      await api('/api/chat', {message:"",session_id:sid,reset:true}, "POST");
+      el('#messages').innerHTML='';
+      el('#trace-content').textContent='';
+      addMessage('llm', 'Reset OK');
+    };
+
+    el('#btn-agent-start').onclick = startAgent;
+    el('#btn-show-conv').onclick   = showConv;
+    el('#btn-show-context').onclick= showContext;
+
+    els('.nav-item').forEach(btn=>btn.onclick = ()=>switchTab(btn.dataset.tab));
+    
+    // Additional event handlers
+    el('#refresh-projects').onclick = loadProjects;
+    el('#refresh-issues').onclick = loadProjectIssues;
+    el('#refresh-mrs').onclick = loadProjectMRs;
+    el('#refresh-pipelines').onclick = loadProjectPipelines;
+    el('#readme-refresh').onclick = async () => {
+      if (activeProject) {
+        // Refresh project to get latest README
+        await selectProject(activeProject.id);
+      }
+    };
+    el('#tree-refresh').onclick = async () => {
+      if (activeProject) {
+        // Refresh project to get latest tree
+        await selectProject(activeProject.id);
+      }
+    };
+    
+    // Composer actions
+    el('#clear-input').onclick = () => el('#input').value = '';
+    el('#attach-context').onclick = () => {
+      if (activeProject) {
+        const context = `Aktuelles Projekt: ${activeProject.name} (ID: ${activeProject.id})\nDefault Branch: ${activeProject.default_branch}`;
+        const current = el('#input').value;
+        el('#input').value = current + (current ? '\n\n' : '') + context;
+      } else {
+        alert('Kein Projekt ausgewählt');
+      }
+    };
+    el('#proj-search').oninput = (e)=>{
+      const val = e.target.value.toLowerCase();
+      els('#projects-list li').forEach(li=>{
+        li.style.display = li.textContent.toLowerCase().includes(val) ? '' : 'none';
+      });
+    };
+
+    el('#composer').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const txt = el('#input').value.trim();
+      if(!txt) return;
+      el('#input').value = '';
+      await sendChat(txt);
+    });
+    el('#input').addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        el('#composer').dispatchEvent(new Event('submit'));
+      }
+    });
+
+    // Init
+    addMessage('llm', 'Willkommen! Wähle links ein Projekt oder stelle eine Frage.');
+    loadProjects();
+  </script>
+</body>
+</html>
